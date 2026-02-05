@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Config holds mog configuration.
@@ -327,4 +328,157 @@ func SaveSlugs(slugs *Slugs) error {
 	}
 
 	return os.WriteFile(filepath.Join(dir, "slugs.json"), data, 0600)
+}
+
+// atomicWriteJSON writes data to a file atomically using temp file + rename.
+// This prevents corruption if the write is interrupted.
+func atomicWriteJSON(path string, data interface{}, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // Clean up on error
+
+	encoder := json.NewEncoder(tmp)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to encode JSON: %w", err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to set permissions: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	return os.Rename(tmpPath, path)
+}
+
+// acquireFileLock acquires an exclusive lock on a file descriptor.
+func acquireFileLock(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+}
+
+// releaseFileLock releases the lock on a file descriptor.
+func releaseFileLock(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+}
+
+// LoadTokensForAccount loads OAuth tokens for a specific account.
+func LoadTokensForAccount(email string) (*Tokens, error) {
+	dir, err := AccountDir(email)
+	if err != nil {
+		return nil, err
+	}
+
+	path := filepath.Join(dir, "tokens.json")
+
+	// Check file permissions for security
+	if info, err := os.Stat(path); err == nil {
+		if info.Mode().Perm() != 0600 {
+			return nil, fmt.Errorf("insecure permissions on %s (expected 0600, got %o)", path, info.Mode().Perm())
+		}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("not logged in for %s. Run: mog auth login %s", email, email)
+		}
+		return nil, err
+	}
+
+	var tokens Tokens
+	if err := json.Unmarshal(data, &tokens); err != nil {
+		return nil, fmt.Errorf("failed to parse tokens for %s: %w", email, err)
+	}
+
+	return &tokens, nil
+}
+
+// SaveTokensForAccount saves OAuth tokens for a specific account using atomic write.
+func SaveTokensForAccount(email string, tokens *Tokens) error {
+	dir, err := AccountDir(email)
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(dir, "tokens.json")
+	return atomicWriteJSON(path, tokens, 0600)
+}
+
+// DeleteTokensForAccount removes stored tokens for a specific account.
+func DeleteTokensForAccount(email string) error {
+	dir, err := AccountDir(email)
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(dir, "tokens.json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// LoadSlugsForAccount loads the slug mappings for a specific account.
+func LoadSlugsForAccount(email string) (*Slugs, error) {
+	dir, err := AccountDir(email)
+	if err != nil {
+		return nil, err
+	}
+
+	path := filepath.Join(dir, "slugs.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &Slugs{
+				IDToSlug: make(map[string]string),
+				SlugToID: make(map[string]string),
+			}, nil
+		}
+		return nil, err
+	}
+
+	var slugs Slugs
+	if err := json.Unmarshal(data, &slugs); err != nil {
+		return nil, fmt.Errorf("failed to parse slugs for %s: %w", email, err)
+	}
+
+	if slugs.IDToSlug == nil {
+		slugs.IDToSlug = make(map[string]string)
+	}
+	if slugs.SlugToID == nil {
+		slugs.SlugToID = make(map[string]string)
+	}
+
+	return &slugs, nil
+}
+
+// SaveSlugsForAccount saves the slug mappings for a specific account.
+func SaveSlugsForAccount(email string, slugs *Slugs) error {
+	dir, err := AccountDir(email)
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(dir, "slugs.json")
+	return atomicWriteJSON(path, slugs, 0600)
+}
+
+// DeleteSlugsForAccount removes stored slugs for a specific account.
+func DeleteSlugsForAccount(email string) error {
+	dir, err := AccountDir(email)
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(dir, "slugs.json")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
