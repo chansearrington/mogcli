@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Config holds mog configuration.
@@ -50,6 +51,120 @@ func (t *Tokens) GetExpiresAt() int64 {
 type Slugs struct {
 	IDToSlug map[string]string `json:"id_to_slug"`
 	SlugToID map[string]string `json:"slug_to_id"`
+}
+
+// PersonalTenantID is the tenant ID for personal Microsoft accounts (MSA).
+// All personal accounts (hotmail.com, live.com, outlook.com) use this tenant.
+const PersonalTenantID = "9188040d-6c67-4c5b-b112-36a304b66dad"
+
+// AccountsConfig holds multi-account configuration.
+type AccountsConfig struct {
+	Default  string                   `json:"default"`  // Default account email
+	Accounts map[string]*AccountEntry `json:"accounts"` // email -> account entry
+}
+
+// AccountEntry holds metadata for a single account.
+type AccountEntry struct {
+	Email       string `json:"email"`
+	TenantID    string `json:"tenant_id"`    // From JWT "tid" claim
+	AccountType string `json:"account_type"` // "personal" or "work"
+	AddedAt     int64  `json:"added_at"`     // Unix timestamp
+}
+
+// IsPersonal returns true if this is a personal Microsoft account.
+func (a *AccountEntry) IsPersonal() bool {
+	return a.TenantID == PersonalTenantID || a.AccountType == "personal"
+}
+
+// SanitizeEmailForPath converts an email to a filesystem-safe directory name.
+// Handles special characters that are invalid in file paths.
+func SanitizeEmailForPath(email string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	// Replace unsafe chars: / \ : * ? " < > |
+	replacer := strings.NewReplacer(
+		"/", "%2F",
+		"\\", "%5C",
+		":", "%3A",
+		"*", "%2A",
+		"?", "%3F",
+		"\"", "%22",
+		"<", "%3C",
+		">", "%3E",
+		"|", "%7C",
+	)
+	return replacer.Replace(email)
+}
+
+// AccountDir returns the directory path for a specific account.
+// Creates the directory if it doesn't exist.
+func AccountDir(email string) (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+
+	accountDir := filepath.Join(dir, "accounts", SanitizeEmailForPath(email))
+	if err := os.MkdirAll(accountDir, 0700); err != nil {
+		return "", err
+	}
+
+	return accountDir, nil
+}
+
+// LoadAccounts loads the multi-account configuration.
+func LoadAccounts() (*AccountsConfig, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+
+	path := filepath.Join(dir, "accounts.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Return empty config if file doesn't exist
+			return &AccountsConfig{
+				Accounts: make(map[string]*AccountEntry),
+			}, nil
+		}
+		return nil, err
+	}
+
+	var cfg AccountsConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+
+	// Initialize map if nil
+	if cfg.Accounts == nil {
+		cfg.Accounts = make(map[string]*AccountEntry)
+	}
+
+	return &cfg, nil
+}
+
+// SaveAccounts saves the multi-account configuration.
+func SaveAccounts(cfg *AccountsConfig) error {
+	dir, err := ConfigDir()
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+
+	// Initialize map if nil
+	if cfg.Accounts == nil {
+		cfg.Accounts = make(map[string]*AccountEntry)
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(dir, "accounts.json"), data, 0600)
 }
 
 // ConfigDir returns the config directory path.
