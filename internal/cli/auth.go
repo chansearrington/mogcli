@@ -86,6 +86,13 @@ func (c *AuthLoginCmd) Run(root *Root) error {
 		return fmt.Errorf("failed to save tokens: %w", err)
 	}
 
+	// Extract tenant ID from the access token to determine account type
+	tenantID := graph.ExtractTenantIDFromToken(tokens.AccessToken)
+	accountType := "work"
+	if tenantID == config.PersonalTenantID {
+		accountType = "personal"
+	}
+
 	// Load and update accounts config
 	accounts, err := config.LoadAccounts()
 	if err != nil {
@@ -95,7 +102,8 @@ func (c *AuthLoginCmd) Run(root *Root) error {
 	// Add or update account entry
 	accounts.Accounts[email] = &config.AccountEntry{
 		Email:       email,
-		AccountType: "work", // Default; could be detected from token
+		TenantID:    tenantID,
+		AccountType: accountType,
 		AddedAt:     time.Now().Unix(),
 	}
 
@@ -128,11 +136,17 @@ func (c *AuthStatusCmd) Run(root *Root) error {
 	}
 
 	// Determine which account to show status for
-	email := c.Email
+	email := strings.ToLower(strings.TrimSpace(c.Email))
 	if email == "" {
 		// Try to resolve account
 		resolved, err := root.ResolveAccount()
 		if err != nil {
+			// Only fall back to legacy if no multi-account config exists
+			accounts, _ := config.LoadAccounts()
+			if accounts != nil && len(accounts.Accounts) > 0 {
+				// Multi-account config exists but resolution failed - show the error
+				return err
+			}
 			// Fall back to legacy single-account behavior
 			tokens, err := config.LoadTokensAuto()
 			if err != nil {
@@ -249,11 +263,16 @@ func (c *AuthLogoutCmd) Run(root *Root) error {
 	}
 
 	// Determine which account to logout
-	email := c.Email
+	email := strings.ToLower(strings.TrimSpace(c.Email))
 	if email == "" {
 		// Try to resolve account
 		resolved, err := root.ResolveAccount()
 		if err != nil {
+			// Only fall back to legacy if no multi-account config exists
+			if len(accounts.Accounts) > 0 {
+				// Multi-account config exists but resolution failed - show the error
+				return err
+			}
 			// Fall back to legacy single-account behavior
 			if err := config.DeleteTokensAuto(); err != nil {
 				return fmt.Errorf("failed to delete tokens: %w", err)

@@ -4,6 +4,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/visionik/mogcli/internal/config"
 	"github.com/visionik/mogcli/internal/graph"
@@ -85,7 +86,11 @@ func (r *Root) ResolveAccount() (string, error) {
 }
 
 // validateAccount checks that the account exists in the config.
+// The email is normalized (lowercased, trimmed) before lookup.
 func (r *Root) validateAccount(email string) (string, error) {
+	// Normalize email for case-insensitive matching
+	email = strings.ToLower(strings.TrimSpace(email))
+
 	accounts, err := config.LoadAccounts()
 	if err != nil {
 		return "", fmt.Errorf("failed to load accounts: %w", err)

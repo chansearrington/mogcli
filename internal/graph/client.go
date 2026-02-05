@@ -5,6 +5,7 @@ package graph
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -135,8 +136,7 @@ func refreshTokenWithLock(email, clientID, refreshToken string) (*config.Tokens,
 	defer tokenRefreshMu.Unlock()
 
 	// Re-check after acquiring lock (another goroutine may have refreshed)
-	cfg, _ := config.Load()
-	if cfg.Storage != "" {
+	if cfg, err := config.Load(); err == nil && cfg != nil && cfg.Storage != "" {
 		config.SetStorage(config.StorageType(cfg.Storage))
 	}
 	tokens, err := config.LoadTokensAutoForAccount(email)
@@ -483,4 +483,44 @@ func doRefreshToken(clientID, refreshToken string) (*config.Tokens, error) {
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Unix() + int64(tokenResp.ExpiresIn),
 	}, nil
+}
+
+// ExtractTenantIDFromToken extracts the tenant ID (tid claim) from a JWT access token.
+// This is used to determine if the account is a personal Microsoft account.
+// Returns empty string if the token cannot be parsed or tid claim is missing.
+func ExtractTenantIDFromToken(accessToken string) string {
+	// JWT format: header.payload.signature
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+
+	// Decode the payload (second part)
+	// JWT uses base64url encoding (no padding)
+	payload := parts[1]
+	// Add padding if needed
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		// Try standard base64 as fallback
+		decoded, err = base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			return ""
+		}
+	}
+
+	var claims struct {
+		TenantID string `json:"tid"`
+	}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return ""
+	}
+
+	return claims.TenantID
 }

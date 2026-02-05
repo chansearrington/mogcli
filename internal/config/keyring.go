@@ -101,10 +101,11 @@ func DeleteTokensAuto() error {
 // Format: mog:<client_hash>:<email>
 // This allows future support for multiple client IDs per account.
 func keyringKeyForAccount(email string) string {
-	cfg, _ := Load()
-	clientID := cfg.GetClientID()
-	if clientID == "" {
-		clientID = "default"
+	clientID := "default"
+	if cfg, err := Load(); err == nil && cfg != nil {
+		if id := cfg.GetClientID(); id != "" {
+			clientID = id
+		}
 	}
 	clientHash := fmt.Sprintf("%x", sha256.Sum256([]byte(clientID)))[:8]
 	return fmt.Sprintf("%s:%s:%s", serviceName, clientHash, email)
