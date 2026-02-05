@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 
@@ -93,5 +94,94 @@ func DeleteTokensAuto() error {
 		return DeleteTokensKeyring()
 	default:
 		return DeleteTokens()
+	}
+}
+
+// keyringKeyForAccount generates a namespaced keyring key for an account.
+// Format: mog:<client_hash>:<email>
+// This allows future support for multiple client IDs per account.
+//
+// Note: If the client ID changes (e.g., user re-registers with a different Azure app),
+// tokens stored under the old key will become inaccessible. Users would need to
+// re-authenticate. This is intentional - tokens are bound to their originating client ID.
+func keyringKeyForAccount(email string) string {
+	clientID := "default"
+	if cfg, err := Load(); err == nil && cfg != nil {
+		if id := cfg.GetClientID(); id != "" {
+			clientID = id
+		}
+	}
+	clientHash := fmt.Sprintf("%x", sha256.Sum256([]byte(clientID)))[:8]
+	return fmt.Sprintf("%s:%s:%s", serviceName, clientHash, email)
+}
+
+// SaveTokensKeyringForAccount saves OAuth tokens to the system keyring for a specific account.
+func SaveTokensKeyringForAccount(email string, tokens *Tokens) error {
+	data, err := json.Marshal(tokens)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tokens: %w", err)
+	}
+	key := keyringKeyForAccount(email)
+	return keyring.Set(serviceName, key, string(data))
+}
+
+// LoadTokensKeyringForAccount loads OAuth tokens from the system keyring for a specific account.
+func LoadTokensKeyringForAccount(email string) (*Tokens, error) {
+	key := keyringKeyForAccount(email)
+	data, err := keyring.Get(serviceName, key)
+	if err != nil {
+		if err == keyring.ErrNotFound {
+			return nil, fmt.Errorf("not logged in for %s. Run: mog auth login %s", email, email)
+		}
+		return nil, fmt.Errorf("failed to get tokens from keyring for %s: %w", email, err)
+	}
+
+	var tokens Tokens
+	if err := json.Unmarshal([]byte(data), &tokens); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal tokens for %s: %w", email, err)
+	}
+	return &tokens, nil
+}
+
+// DeleteTokensKeyringForAccount removes OAuth tokens from the system keyring for a specific account.
+func DeleteTokensKeyringForAccount(email string) error {
+	key := keyringKeyForAccount(email)
+	err := keyring.Delete(serviceName, key)
+	if err != nil && err != keyring.ErrNotFound {
+		return fmt.Errorf("failed to delete tokens from keyring for %s: %w", email, err)
+	}
+	return nil
+}
+
+// SaveTokensAutoForAccount saves tokens for an account using the current storage type.
+func SaveTokensAutoForAccount(email string, tokens *Tokens) error {
+	switch CurrentStorage {
+	case StorageKeyring:
+		return SaveTokensKeyringForAccount(email, tokens)
+	default:
+		return SaveTokensForAccount(email, tokens)
+	}
+}
+
+// LoadTokensAutoForAccount loads tokens for an account using the current storage type.
+// Note: This function loads tokens sequentially from a single storage backend based on
+// CurrentStorage. It does not fall back to file if keyring fails (or vice versa).
+// The storage type should be set before calling this function via SetStorage().
+func LoadTokensAutoForAccount(email string) (*Tokens, error) {
+	switch CurrentStorage {
+	case StorageKeyring:
+		return LoadTokensKeyringForAccount(email)
+	default:
+		return LoadTokensForAccount(email)
+	}
+}
+
+// DeleteTokensAutoForAccount deletes tokens for an account using the current storage type.
+func DeleteTokensAutoForAccount(email string) error {
+	switch CurrentStorage {
+	case StorageKeyring:
+		return DeleteTokensKeyringForAccount(email)
+	default:
+		return DeleteTokensForAccount(email)
 	}
 }

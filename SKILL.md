@@ -79,6 +79,17 @@ mog onenote notebooks
 mog onenote search "meeting notes"
 ```
 
+## Multi-Account
+
+Resolution: `--account` > `MOG_ACCOUNT` env > default > single-account auto-select
+
+```bash
+mog auth login user@example.com --client-id <id>
+mog auth list                    # * marks default, shows (work)/(personal)
+mog auth default <email>
+mog -a user@example.com mail search "*"
+```
+
 ## Slugs
 
 mog generates 8-character slugs for Microsoft's long GUIDs:
@@ -93,18 +104,17 @@ mog generates 8-character slugs for Microsoft's long GUIDs:
 
 ## Credential Storage
 
-OAuth tokens stored in config directory (0600 permissions):
+Per-account storage: `~/.config/mog/accounts/<email>/tokens.json`
+
+Keychain keys: `mog:<client_hash>:<email>`
+
+Storage option: `--storage keychain` on login
 
 | Platform | Location |
 |----------|----------|
 | **macOS** | `~/.config/mog/` |
 | **Linux** | `~/.config/mog/` |
 | **Windows** | `%USERPROFILE%\.config\mog\` |
-
-Files:
-- `tokens.json` - OAuth tokens (encrypted at rest by OS)
-- `settings.json` - Client ID
-- `slugs.json` - Slug cache
 
 ## See Also
 

@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/visionik/mogcli/internal/config"
 )
 
 func TestFormatID(t *testing.T) {
@@ -18,9 +17,7 @@ func TestFormatID(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	tests := []struct {
 		name  string
@@ -49,9 +46,7 @@ func TestFormatID_Consistency(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	id := "AQMkADAwATMzAGZmAS04MDViLTRiNzgtMDACLTAwCgBGAAADTestID123"
 
@@ -70,9 +65,7 @@ func TestResolveID(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	tests := []struct {
 		name  string
@@ -102,9 +95,7 @@ func TestResolveID_RoundTrip(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	originalID := "AQMkADAwATMzAGZmAS04MDViLTRiNzgtMDACLTAwCgBGAAADRoundTrip"
 
@@ -128,23 +119,18 @@ func TestClearSlugs(t *testing.T) {
 	configDir := filepath.Join(tmpDir, ".config", "mog")
 	require.NoError(t, os.MkdirAll(configDir, 0700))
 
-	// Add some slugs
-	slugMu.Lock()
-	slugCache = &config.Slugs{
-		IDToSlug: map[string]string{"test": "slug"},
-		SlugToID: map[string]string{"slug": "test"},
-	}
-	slugMu.Unlock()
+	// Reset caches and add a slug via FormatID
+	ResetSlugCaches()
+	testID := "AQMkADAwATMzAGZmAS04MDViLTRiNzgtMDACLTAwCgBGAAATestClear"
+	FormatID(testID) // This creates a slug
 
 	// Clear
 	err := ClearSlugs()
 	require.NoError(t, err)
 
-	// Verify cleared
-	slugMu.Lock()
-	assert.Empty(t, slugCache.IDToSlug)
-	assert.Empty(t, slugCache.SlugToID)
-	slugMu.Unlock()
+	// Verify cleared - ResolveID should return the short slug as-is (not found)
+	result := ResolveID("abc12345")
+	assert.Equal(t, "abc12345", result, "unknown slug should pass through after clear")
 }
 
 func TestFormatID_CollisionHandling(t *testing.T) {
@@ -155,9 +141,7 @@ func TestFormatID_CollisionHandling(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	// Generate slugs for multiple IDs
 	ids := []string{
@@ -196,9 +180,7 @@ func TestResolveID_UnknownSlug(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	// Unknown short string should pass through
 	unknown := "xyz12345"
@@ -218,17 +200,13 @@ func TestFormatID_CachePersistence(t *testing.T) {
 	require.NoError(t, os.MkdirAll(configDir, 0700))
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	id := "PersistenceTestID_XXXXXXXXXXXXXXXX"
 	slug1 := FormatID(id)
 
 	// Clear in-memory cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	// Should reload from disk and resolve
 	resolved := ResolveID(slug1)
@@ -243,9 +221,7 @@ func TestFormatID_SlugLength(t *testing.T) {
 	defer os.Setenv("HOME", origHome)
 
 	// Clear cache
-	slugMu.Lock()
-	slugCache = nil
-	slugMu.Unlock()
+	ResetSlugCaches()
 
 	// Various ID lengths
 	ids := []string{

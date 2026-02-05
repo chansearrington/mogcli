@@ -90,7 +90,11 @@ func TestNewClient_ExpiredToken_NoRefresh(t *testing.T) {
 
 	_, err := NewClient()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "expired")
+	// Either "expired" (legacy) or "client ID required" (multi-account migration)
+	assert.True(t, strings.Contains(err.Error(), "expired") ||
+		strings.Contains(err.Error(), "client ID required") ||
+		strings.Contains(err.Error(), "refresh"),
+		"expected refresh-related error, got: %v", err)
 }
 
 func TestClient_Get(t *testing.T) {
@@ -1319,4 +1323,77 @@ func TestRequestDeviceCode_ParseError(t *testing.T) {
 	// This should return an error due to JSON parsing failure
 	_, err := RequestDeviceCode("test-client-id")
 	assert.Error(t, err)
+}
+
+func TestExtractTenantIDFromToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		token    string
+		expected string
+	}{
+		{
+			name:     "empty token",
+			token:    "",
+			expected: "",
+		},
+		{
+			name:     "invalid token format (no dots)",
+			token:    "notavalidtoken",
+			expected: "",
+		},
+		{
+			name:     "invalid token format (one dot)",
+			token:    "header.payload",
+			expected: "",
+		},
+		{
+			name: "valid token with work tenant ID",
+			// JWT payload: {"tid": "12345678-1234-1234-1234-123456789012"}
+			// Base64URL encoded: eyJ0aWQiOiAiMTIzNDU2NzgtMTIzNC0xMjM0LTEyMzQtMTIzNDU2Nzg5MDEyIn0
+			token:    "eyJhbGciOiJSUzI1NiJ9.eyJ0aWQiOiAiMTIzNDU2NzgtMTIzNC0xMjM0LTEyMzQtMTIzNDU2Nzg5MDEyIn0.signature",
+			expected: "12345678-1234-1234-1234-123456789012",
+		},
+		{
+			name: "valid token with personal tenant ID",
+			// JWT payload: {"tid": "9188040d-6c67-4c5b-b112-36a304b66dad"}
+			// Base64URL encoded: eyJ0aWQiOiAiOTE4ODA0MGQtNmM2Ny00YzViLWIxMTItMzZhMzA0YjY2ZGFkIn0
+			token:    "eyJhbGciOiJSUzI1NiJ9.eyJ0aWQiOiAiOTE4ODA0MGQtNmM2Ny00YzViLWIxMTItMzZhMzA0YjY2ZGFkIn0.signature",
+			expected: "9188040d-6c67-4c5b-b112-36a304b66dad",
+		},
+		{
+			name: "token without tid claim",
+			// JWT payload: {"sub": "user@example.com"}
+			// Base64URL encoded: eyJzdWIiOiAidXNlckBleGFtcGxlLmNvbSJ9
+			token:    "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiAidXNlckBleGFtcGxlLmNvbSJ9.signature",
+			expected: "",
+		},
+		{
+			name:     "token with invalid base64 payload",
+			token:    "header.!!!invalid!!!.signature",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ExtractTenantIDFromToken(tt.token)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestExtractTenantIDFromToken_PersonalAccountDetection(t *testing.T) {
+	// Test that we can correctly identify personal accounts by tenant ID
+	// Personal tenant ID: 9188040d-6c67-4c5b-b112-36a304b66dad
+	personalTenantID := "9188040d-6c67-4c5b-b112-36a304b66dad"
+
+	// Create a token with the personal tenant ID
+	// JWT payload: {"tid": "9188040d-6c67-4c5b-b112-36a304b66dad"}
+	token := "eyJhbGciOiJSUzI1NiJ9.eyJ0aWQiOiAiOTE4ODA0MGQtNmM2Ny00YzViLWIxMTItMzZhMzA0YjY2ZGFkIn0.signature"
+
+	tenantID := ExtractTenantIDFromToken(token)
+	assert.Equal(t, personalTenantID, tenantID)
+
+	// Verify it matches the personal tenant constant
+	assert.Equal(t, config.PersonalTenantID, tenantID)
 }

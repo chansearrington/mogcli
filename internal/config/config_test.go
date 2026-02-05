@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -532,4 +533,352 @@ func TestSlugs_OnlySlugToID(t *testing.T) {
 	assert.NotNil(t, slugs.IDToSlug)
 	assert.NotNil(t, slugs.SlugToID)
 	assert.Equal(t, "id1", slugs.SlugToID["slug1"])
+}
+
+// Multi-account tests
+
+func TestAccounts_SaveLoad(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Create accounts config
+	accounts := &AccountsConfig{
+		Default: "user@example.com",
+		Accounts: map[string]*AccountEntry{
+			"user@example.com": {
+				Email:       "user@example.com",
+				TenantID:    "tenant-123",
+				AccountType: "work",
+				AddedAt:     1234567890,
+			},
+		},
+	}
+
+	// Save
+	err := SaveAccounts(accounts)
+	require.NoError(t, err)
+
+	// Load
+	loaded, err := LoadAccounts()
+	require.NoError(t, err)
+	assert.Equal(t, accounts.Default, loaded.Default)
+	assert.Len(t, loaded.Accounts, 1)
+	assert.Equal(t, "user@example.com", loaded.Accounts["user@example.com"].Email)
+	assert.Equal(t, "work", loaded.Accounts["user@example.com"].AccountType)
+}
+
+func TestAccounts_LoadMissing(t *testing.T) {
+	// Setup: use temp dir with no accounts
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Load should return empty config, not error
+	accounts, err := LoadAccounts()
+	require.NoError(t, err)
+	assert.NotNil(t, accounts)
+	assert.Empty(t, accounts.Default)
+	assert.NotNil(t, accounts.Accounts)
+	assert.Empty(t, accounts.Accounts)
+}
+
+func TestAccountEntry_IsPersonal(t *testing.T) {
+	tests := []struct {
+		name     string
+		entry    *AccountEntry
+		expected bool
+	}{
+		{
+			name:     "personal by tenant ID",
+			entry:    &AccountEntry{TenantID: PersonalTenantID},
+			expected: true,
+		},
+		{
+			name:     "personal by account type",
+			entry:    &AccountEntry{AccountType: "personal"},
+			expected: true,
+		},
+		{
+			name:     "work account",
+			entry:    &AccountEntry{TenantID: "work-tenant-123", AccountType: "work"},
+			expected: false,
+		},
+		{
+			name:     "empty entry",
+			entry:    &AccountEntry{},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.entry.IsPersonal()
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestSanitizeEmailForPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		email    string
+		expected string
+	}{
+		{
+			name:     "simple email",
+			email:    "user@example.com",
+			expected: "user@example.com",
+		},
+		{
+			name:     "uppercase email",
+			email:    "User@Example.COM",
+			expected: "user@example.com",
+		},
+		{
+			name:     "email with spaces",
+			email:    "  user@example.com  ",
+			expected: "user@example.com",
+		},
+		{
+			name:     "email with slash",
+			email:    "user/test@example.com",
+			expected: "user%2Ftest@example.com",
+		},
+		{
+			name:     "email with special chars",
+			email:    "user:test@example.com",
+			expected: "user%3Atest@example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := SanitizeEmailForPath(tt.email)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestAccountDir(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	dir, err := AccountDir("user@example.com")
+	require.NoError(t, err)
+	assert.Contains(t, dir, "accounts")
+	assert.Contains(t, dir, "user@example.com")
+
+	// Verify directory was created
+	info, err := os.Stat(dir)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
+func TestTokensForAccount_SaveLoad(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	email := "user@example.com"
+	tokens := &Tokens{
+		AccessToken:  "account-access-token",
+		RefreshToken: "account-refresh-token",
+		ExpiresAt:    1234567890,
+	}
+
+	// Save
+	err := SaveTokensForAccount(email, tokens)
+	require.NoError(t, err)
+
+	// Load
+	loaded, err := LoadTokensForAccount(email)
+	require.NoError(t, err)
+	assert.Equal(t, tokens.AccessToken, loaded.AccessToken)
+	assert.Equal(t, tokens.RefreshToken, loaded.RefreshToken)
+	assert.Equal(t, tokens.ExpiresAt, loaded.ExpiresAt)
+}
+
+func TestTokensForAccount_LoadMissing(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Load should return error for missing tokens
+	_, err := LoadTokensForAccount("nonexistent@example.com")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not logged in")
+}
+
+func TestTokensForAccount_Delete(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	email := "user@example.com"
+
+	// Save tokens first
+	tokens := &Tokens{AccessToken: "test"}
+	err := SaveTokensForAccount(email, tokens)
+	require.NoError(t, err)
+
+	// Delete
+	err = DeleteTokensForAccount(email)
+	require.NoError(t, err)
+
+	// Should not exist anymore
+	_, err = LoadTokensForAccount(email)
+	assert.Error(t, err)
+}
+
+func TestSlugsForAccount_SaveLoad(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	email := "user@example.com"
+	slugs := &Slugs{
+		IDToSlug: map[string]string{"id1": "slug1"},
+		SlugToID: map[string]string{"slug1": "id1"},
+	}
+
+	// Save
+	err := SaveSlugsForAccount(email, slugs)
+	require.NoError(t, err)
+
+	// Load
+	loaded, err := LoadSlugsForAccount(email)
+	require.NoError(t, err)
+	assert.Equal(t, slugs.IDToSlug, loaded.IDToSlug)
+	assert.Equal(t, slugs.SlugToID, loaded.SlugToID)
+}
+
+func TestSlugsForAccount_LoadMissing(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Load should return empty slugs, not error
+	slugs, err := LoadSlugsForAccount("user@example.com")
+	require.NoError(t, err)
+	assert.NotNil(t, slugs.IDToSlug)
+	assert.NotNil(t, slugs.SlugToID)
+	assert.Empty(t, slugs.IDToSlug)
+}
+
+func TestMigrateToMultiAccount(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Create old-style tokens.json
+	configDir := filepath.Join(tmpDir, ".config", "mog")
+	require.NoError(t, os.MkdirAll(configDir, 0700))
+
+	oldTokens := &Tokens{
+		AccessToken:  "old-access-token",
+		RefreshToken: "old-refresh-token",
+		ExpiresAt:    1234567890,
+	}
+	oldTokensData, _ := json.MarshalIndent(oldTokens, "", "  ")
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "tokens.json"), oldTokensData, 0600))
+
+	// Also create old slugs
+	oldSlugs := &Slugs{
+		IDToSlug: map[string]string{"old-id": "old-slug"},
+		SlugToID: map[string]string{"old-slug": "old-id"},
+	}
+	oldSlugsData, _ := json.MarshalIndent(oldSlugs, "", "  ")
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "slugs.json"), oldSlugsData, 0600))
+
+	// Run migration
+	err := MigrateToMultiAccount()
+	require.NoError(t, err)
+
+	// Verify accounts.json was created
+	accounts, err := LoadAccounts()
+	require.NoError(t, err)
+	assert.Equal(t, "migrated", accounts.Default)
+	assert.Contains(t, accounts.Accounts, "migrated")
+
+	// Verify tokens were moved
+	migratedTokens, err := LoadTokensForAccount("migrated")
+	require.NoError(t, err)
+	assert.Equal(t, oldTokens.AccessToken, migratedTokens.AccessToken)
+
+	// Verify old tokens.json was removed
+	_, err = os.Stat(filepath.Join(configDir, "tokens.json"))
+	assert.True(t, os.IsNotExist(err))
+
+	// Verify backup was created
+	backupDir := filepath.Join(configDir, ".backup-migration")
+	info, err := os.Stat(backupDir)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
+func TestMigrateToMultiAccount_NoOldTokens(t *testing.T) {
+	// Setup: use temp dir with no old tokens
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Migration should be a no-op
+	err := MigrateToMultiAccount()
+	require.NoError(t, err)
+
+	// Verify no accounts.json was created
+	configDir := filepath.Join(tmpDir, ".config", "mog")
+	_, err = os.Stat(filepath.Join(configDir, "accounts.json"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestMigrateToMultiAccount_AlreadyMigrated(t *testing.T) {
+	// Setup: use temp dir
+	origHome := os.Getenv("HOME")
+	tmpDir := t.TempDir()
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Create existing multi-account config
+	accounts := &AccountsConfig{
+		Default: "existing@example.com",
+		Accounts: map[string]*AccountEntry{
+			"existing@example.com": {Email: "existing@example.com"},
+		},
+	}
+	err := SaveAccounts(accounts)
+	require.NoError(t, err)
+
+	// Also create old tokens (should be ignored since already migrated)
+	configDir, _ := ConfigDir()
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "tokens.json"), []byte(`{"access_token":"old"}`), 0600))
+
+	// Migration should be a no-op
+	err = MigrateToMultiAccount()
+	require.NoError(t, err)
+
+	// Verify original accounts.json is unchanged
+	loaded, err := LoadAccounts()
+	require.NoError(t, err)
+	assert.Equal(t, "existing@example.com", loaded.Default)
 }

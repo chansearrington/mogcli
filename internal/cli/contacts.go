@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/visionik/mogcli/internal/config"
 	"github.com/visionik/mogcli/internal/graph"
 )
 
@@ -291,6 +292,20 @@ func (c *ContactsDirectoryCmd) Run(root *Root) error {
 	client, err := root.GetClient()
 	if err != nil {
 		return err
+	}
+
+	// Check if this is a personal account (directory search not supported)
+	// GetClient sets the current account, so we check after getting the client
+	currentEmail := graph.GetCurrentAccount()
+	if currentEmail != "" {
+		accounts, _ := config.LoadAccounts()
+		if accounts != nil {
+			if account, ok := accounts.Accounts[currentEmail]; ok && account.IsPersonal() {
+				return fmt.Errorf("directory search is only available for work/school accounts.\n" +
+					"Personal Microsoft accounts cannot access the organization directory.\n" +
+					"Use 'mog contacts search' to search your personal contacts instead.")
+			}
+		}
 	}
 
 	ctx := context.Background()

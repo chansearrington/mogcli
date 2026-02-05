@@ -7,12 +7,13 @@ CLI for Microsoft 365 — Mail, Calendar, Drive, Contacts, Tasks, OneNote.
 
 ## Quick Start
 
-mog auth login --client-id YOUR_AZURE_CLIENT_ID
+mog auth login user@example.com --client-id YOUR_AZURE_CLIENT_ID
 mog auth status
 mog mail search "*" --max 10
 
 ## Global Flags
 
+--account, -a    Account email to use (or MOG_ACCOUNT env)
 --json           JSON output (for scripting)
 --plain          Plain text output (TSV)
 --verbose, -v    Show full IDs
@@ -20,11 +21,37 @@ mog mail search "*" --max 10
 --no-input       Never prompt (CI mode)
 --ai-help        This help text
 
+## Multi-Account Support
+
+mog supports multiple Microsoft 365 accounts simultaneously.
+
+# Login multiple accounts
+mog auth login user@example.com --client-id <id>
+mog auth login other@example.com --client-id <id>
+
+# List all accounts (* marks default)
+mog auth list
+
+# Set default account
+mog auth default user@example.com
+
+# Use specific account (overrides default)
+mog --account other@example.com mail search "*"
+mog -a other@example.com calendar list
+
+# Use env var
+MOG_ACCOUNT=other@example.com mog mail search "*"
+
+Account resolution order: --account flag > MOG_ACCOUNT env > default account > single-account auto-select
+
 ## Authentication
 
-mog auth login --client-id <id>    # Device code flow
-mog auth status                     # Check auth status
-mog auth logout                     # Clear tokens
+mog auth login <email> --client-id <id>  # Add account (device code flow)
+mog auth list                             # List all accounts
+mog auth default <email>                  # Set default account
+mog auth status [email]                   # Check auth status
+mog auth logout [email]                   # Logout specific account
+mog auth logout --all                     # Logout all accounts
 
 Required Azure AD permissions (delegated):
 - User.Read, offline_access
@@ -207,12 +234,14 @@ Default: Human-readable colored output
 ## Environment Variables
 
 MOG_CLIENT_ID    Azure AD client ID
+MOG_ACCOUNT      Default account email (overrides config)
 
 ## Configuration
 
-~/.config/mog/settings.json   Client ID
-~/.config/mog/tokens.json     OAuth tokens (sensitive)
-~/.config/mog/slugs.json      ID slug cache
+~/.config/mog/settings.json   Client ID, storage preference
+~/.config/mog/accounts.json   Multi-account configuration
+~/.config/mog/accounts/<email>/tokens.json  OAuth tokens (per account)
+~/.config/mog/accounts/<email>/slugs.json   ID slug cache (per account)
 
 ## Examples
 
