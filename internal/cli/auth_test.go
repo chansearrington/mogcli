@@ -115,11 +115,6 @@ func TestAuthLogoutCmd_Run(t *testing.T) {
 	})
 
 	assert.Contains(t, output, "Logged out")
-
-	// Verify tokens are deleted (either from legacy or migrated location)
-	_, err := config.LoadTokens()
-	// Error is expected since tokens should be cleared
-	_ = err
 }
 
 func TestAuthLogoutCmd_Run_NoTokens(t *testing.T) {

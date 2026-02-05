@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // Config holds mog configuration.
@@ -369,16 +368,6 @@ func atomicWriteJSON(path string, data interface{}, perm os.FileMode) error {
 	return os.Rename(tmpPath, path)
 }
 
-// acquireFileLock acquires an exclusive lock on a file descriptor.
-func acquireFileLock(f *os.File) error {
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
-}
-
-// releaseFileLock releases the lock on a file descriptor.
-func releaseFileLock(f *os.File) error {
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-}
-
 // LoadTokensForAccount loads OAuth tokens for a specific account.
 func LoadTokensForAccount(email string) (*Tokens, error) {
 	dir, err := AccountDir(email)
@@ -388,10 +377,10 @@ func LoadTokensForAccount(email string) (*Tokens, error) {
 
 	path := filepath.Join(dir, "tokens.json")
 
-	// Check file permissions for security
+	// Check file permissions for security (reject world or group readable)
 	if info, err := os.Stat(path); err == nil {
-		if info.Mode().Perm() != 0600 {
-			return nil, fmt.Errorf("insecure permissions on %s (expected 0600, got %o)", path, info.Mode().Perm())
+		if info.Mode().Perm()&0077 != 0 {
+			return nil, fmt.Errorf("insecure permissions on %s (got %o, should not be group/world readable)", path, info.Mode().Perm())
 		}
 	}
 
