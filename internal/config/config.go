@@ -113,6 +113,7 @@ func AccountDir(email string) (string, error) {
 }
 
 // LoadAccounts loads the multi-account configuration.
+// Automatically attempts migration from single-account format if needed.
 func LoadAccounts() (*AccountsConfig, error) {
 	dir, err := ConfigDir()
 	if err != nil {
@@ -123,12 +124,23 @@ func LoadAccounts() (*AccountsConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return empty config if file doesn't exist
-			return &AccountsConfig{
-				Accounts: make(map[string]*AccountEntry),
-			}, nil
+			// Try to migrate from single-account format
+			TryMigrate()
+
+			// Try loading again after migration
+			data, err = os.ReadFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					// Return empty config if file still doesn't exist
+					return &AccountsConfig{
+						Accounts: make(map[string]*AccountEntry),
+					}, nil
+				}
+				return nil, err
+			}
+		} else {
+			return nil, err
 		}
-		return nil, err
 	}
 
 	var cfg AccountsConfig
@@ -481,4 +493,115 @@ func DeleteSlugsForAccount(email string) error {
 		return err
 	}
 	return nil
+}
+
+// MigrateToMultiAccount migrates single-account config to multi-account format.
+// This is called automatically when old tokens exist but no accounts.json.
+// It's idempotent - safe to call multiple times.
+func MigrateToMultiAccount() error {
+	dir, err := ConfigDir()
+	if err != nil {
+		return err
+	}
+
+	// Check if already migrated (accounts.json exists with accounts)
+	accountsPath := filepath.Join(dir, "accounts.json")
+	if data, err := os.ReadFile(accountsPath); err == nil {
+		var cfg AccountsConfig
+		if json.Unmarshal(data, &cfg) == nil && len(cfg.Accounts) > 0 {
+			return nil // Already migrated
+		}
+	}
+
+	// Check if old tokens exist
+	oldTokensPath := filepath.Join(dir, "tokens.json")
+	oldTokensData, err := os.ReadFile(oldTokensPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Nothing to migrate
+		}
+		return err
+	}
+
+	var tokens Tokens
+	if err := json.Unmarshal(oldTokensData, &tokens); err != nil {
+		return fmt.Errorf("failed to parse old tokens: %w", err)
+	}
+
+	// Use "migrated" as placeholder email if we can't determine it
+	email := "migrated"
+
+	// Create backup of old config
+	backupDir := filepath.Join(dir, ".backup-migration")
+	if err := os.MkdirAll(backupDir, 0700); err != nil {
+		return fmt.Errorf("failed to create backup dir: %w", err)
+	}
+
+	// Backup tokens.json
+	backupTokensPath := filepath.Join(backupDir, "tokens.json")
+	if err := os.WriteFile(backupTokensPath, oldTokensData, 0600); err != nil {
+		return fmt.Errorf("failed to backup tokens: %w", err)
+	}
+
+	// Backup slugs.json if it exists
+	oldSlugsPath := filepath.Join(dir, "slugs.json")
+	if slugsData, err := os.ReadFile(oldSlugsPath); err == nil {
+		backupSlugsPath := filepath.Join(backupDir, "slugs.json")
+		if err := os.WriteFile(backupSlugsPath, slugsData, 0600); err != nil {
+			return fmt.Errorf("failed to backup slugs: %w", err)
+		}
+	}
+
+	// Create account directory and move tokens
+	accountDir, err := AccountDir(email)
+	if err != nil {
+		return fmt.Errorf("failed to create account dir: %w", err)
+	}
+
+	// Move tokens to account directory
+	newTokensPath := filepath.Join(accountDir, "tokens.json")
+	if err := os.WriteFile(newTokensPath, oldTokensData, 0600); err != nil {
+		return fmt.Errorf("failed to write account tokens: %w", err)
+	}
+
+	// Move slugs if they exist
+	if slugsData, err := os.ReadFile(oldSlugsPath); err == nil {
+		newSlugsPath := filepath.Join(accountDir, "slugs.json")
+		if err := os.WriteFile(newSlugsPath, slugsData, 0600); err != nil {
+			return fmt.Errorf("failed to write account slugs: %w", err)
+		}
+		// Remove old slugs file
+		_ = os.Remove(oldSlugsPath)
+	}
+
+	// Create accounts.json with migrated account
+	accounts := &AccountsConfig{
+		Default: email,
+		Accounts: map[string]*AccountEntry{
+			email: {
+				Email:       email,
+				AccountType: "work", // Assume work account
+				AddedAt:     0,      // Unknown
+			},
+		},
+	}
+
+	if err := SaveAccounts(accounts); err != nil {
+		return fmt.Errorf("failed to save accounts: %w", err)
+	}
+
+	// Remove old tokens file (backup exists)
+	_ = os.Remove(oldTokensPath)
+
+	return nil
+}
+
+// TryMigrate attempts to migrate from single-account to multi-account format.
+// This is a no-op if already migrated or no old tokens exist.
+// Errors are logged but not returned to avoid blocking normal operation.
+func TryMigrate() {
+	if err := MigrateToMultiAccount(); err != nil {
+		// Log but don't fail - user can still use the CLI
+		fmt.Fprintf(os.Stderr, "Warning: migration failed: %v\n", err)
+	}
 }

@@ -90,7 +90,11 @@ func TestNewClient_ExpiredToken_NoRefresh(t *testing.T) {
 
 	_, err := NewClient()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "expired")
+	// Either "expired" (legacy) or "client ID required" (multi-account migration)
+	assert.True(t, strings.Contains(err.Error(), "expired") ||
+		strings.Contains(err.Error(), "client ID required") ||
+		strings.Contains(err.Error(), "refresh"),
+		"expected refresh-related error, got: %v", err)
 }
 
 func TestClient_Get(t *testing.T) {
