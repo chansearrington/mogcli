@@ -37,7 +37,7 @@ The **Microsoft** counterpart to [gog](https://github.com/visionik/gog) (Google 
 go install github.com/visionik/mogcli/cmd/mog@latest
 
 # Authenticate (see Setup below for Azure AD app)
-mog auth login --client-id YOUR_CLIENT_ID
+mog auth login user@example.com --client-id YOUR_CLIENT_ID
 
 # Check mail
 mog mail search "*" --max 10
@@ -112,10 +112,10 @@ Add these **Delegated** permissions:
 ### 3. Authenticate
 
 ```bash
-mog auth login --client-id YOUR_CLIENT_ID
+mog auth login user@example.com --client-id YOUR_CLIENT_ID
 ```
 
-Opens a browser for Microsoft login. Tokens stored at `~/.config/mog/tokens.json`.
+Opens a browser for Microsoft login. Tokens stored per-account in `~/.config/mog/accounts/<email>/`.
 
 ### 4. Verify
 
@@ -125,18 +125,66 @@ mog auth status
 
 ---
 
+## Multi-Account Support
+
+mog supports multiple Microsoft 365 accounts simultaneously.
+
+### Login & Account Management
+
+```bash
+# First account (requires client-id)
+mog auth login user@work.com --client-id YOUR_CLIENT_ID
+
+# Additional accounts (reuses client-id)
+mog auth login personal@live.com
+
+# Use system keychain for token storage
+mog auth login user@work.com --storage keychain
+
+# Manage accounts
+mog auth list                       # List accounts (* = default)
+mog auth default user@work.com      # Set default account
+mog auth status [email]             # Check auth status
+mog auth logout [email]             # Logout specific account
+mog auth logout --all               # Logout all accounts
+```
+
+Example `mog auth list` output:
+```
+* user@work.com (work) [valid]
+  personal@live.com (personal) [expired]
+```
+
+### Account Selection
+
+| Priority | Method | Example |
+|----------|--------|---------|
+| 1 | `--account` flag | `mog -a user@work.com mail search "*"` |
+| 2 | `MOG_ACCOUNT` env | `MOG_ACCOUNT=user@work.com mog mail search "*"` |
+| 3 | Default account | Set via `mog auth default` |
+| 4 | Auto-select | When only one account configured |
+
+### Edge Cases
+
+- **Logging out the default:** If one account remains, it becomes default. Otherwise, no default is set.
+- **Re-logging in:** Overwrites existing account entry (refreshes tokens).
+- **Migration:** Existing single-account setups migrate automatically on first use.
+
+---
+
 ## 📖 Command Reference
 
 ### Global Options
 
-| Option | Description |
-|--------|-------------|
-| `--json` | Output JSON (best for scripting) |
-| `--plain` | Stable text output (TSV, no colors) |
-| `--verbose` | Show full IDs and extra details |
-| `--force` | Skip confirmations |
-| `--no-input` | Never prompt (CI mode) |
-| `--ai-help` | Full docs for AI agents |
+| Option | Env Variable | Description |
+|--------|--------------|-------------|
+| `--account`, `-a` | `MOG_ACCOUNT` | Account email to use |
+| `--json` | | Output JSON (best for scripting) |
+| `--plain` | | Stable text output (TSV, no colors) |
+| `--verbose` | | Show full IDs and extra details |
+| `--force` | | Skip confirmations |
+| `--no-input` | | Never prompt (CI mode) |
+| `--ai-help` | | Full docs for AI agents |
 
 ---
 
@@ -370,17 +418,39 @@ mog follows [gog](https://github.com/visionik/gog) patterns for muscle memory ac
 
 ## 🗂️ Configuration
 
-| File | Purpose |
-|------|---------|
-| `~/.config/mog/tokens.json` | OAuth tokens (sensitive) |
-| `~/.config/mog/settings.json` | Client ID and settings |
-| `~/.config/mog/slugs.json` | ID-to-slug cache |
+Files stored in `~/.config/mog/`:
+
+```
+~/.config/mog/
+├── settings.json           # Client ID, storage preference
+├── accounts.json           # Account list and default
+└── accounts/<email>/
+    ├── tokens.json         # OAuth tokens (per account)
+    └── slugs.json          # ID abbreviation cache
+```
+
+Migration backups: `~/.config/mog/.backup-migration/`
 
 **Environment Variables:**
 
 | Variable | Description |
 |----------|-------------|
 | `MOG_CLIENT_ID` | Azure AD client ID (alternative to --client-id) |
+| `MOG_ACCOUNT` | Account email to use (overrides default) |
+
+---
+
+## 🔧 Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "not logged in" | Run `mog auth login <email> --client-id <id>` |
+| "multiple accounts configured" | Use `--account` flag or `mog auth default <email>` |
+| "account not found" | Check accounts with `mog auth list` |
+| "--client-id required" | First login requires `--client-id`; subsequent logins reuse it |
+| "rate limited" | Wait the specified seconds and retry |
+| "directory search only for work/school" | Use `mog contacts search` for personal accounts |
+| Account shows as "migrated" | Logout and re-login with your actual email |
 
 ---
 

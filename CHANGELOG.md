@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Multi-account support for managing multiple Microsoft 365 accounts
+- New commands: `mog auth list`, `mog auth default <email>`
+- Global `--account` / `-a` flag and `MOG_ACCOUNT` environment variable
+- Account type detection (personal vs work/school)
+- `--storage keychain` option for system keychain storage
+
+### Changed
+- `mog auth login` now requires email as first argument
+- `mog auth status` and `mog auth logout` accept optional email argument
+- Tokens stored per-account in `~/.config/mog/accounts/<email>/`
+- Existing single-account setups migrate automatically
+
+### Fixed
+- Nil dereference in keyring and client initialization when config is missing
+- `contacts directory` now shows helpful error for personal accounts (API limitation)
+- Account lookup is now case-insensitive (handles mixed-case email input)
+- Clear error message when multiple accounts exist but no default is set
+
 ## [0.3.1] - 2026-01-26
 
 ### Added

@@ -7,7 +7,7 @@ CLI for Microsoft 365 — Mail, Calendar, Drive, Contacts, Tasks, OneNote.
 
 ## Quick Start
 
-mog auth login --client-id YOUR_AZURE_CLIENT_ID
+mog auth login user@example.com --client-id YOUR_AZURE_CLIENT_ID
 mog auth status
 mog mail search "*" --max 10
 
@@ -42,7 +42,7 @@ mog -a other@example.com calendar list
 # Use env var
 MOG_ACCOUNT=other@example.com mog mail search "*"
 
-Account resolution order: --account flag > MOG_ACCOUNT env > default account
+Account resolution order: --account flag > MOG_ACCOUNT env > default account > single-account auto-select
 
 ## Authentication
 
