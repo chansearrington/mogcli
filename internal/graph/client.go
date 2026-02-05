@@ -11,10 +11,15 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/visionik/mogcli/internal/config"
 )
+
+// tokenRefreshMu protects token refresh operations to prevent race conditions
+// when multiple goroutines try to refresh the same token simultaneously.
+var tokenRefreshMu sync.Mutex
 
 var (
 	// GraphBaseURL is the base URL for the Microsoft Graph API.
@@ -38,11 +43,25 @@ type Client interface {
 type GraphClient struct {
 	httpClient *http.Client
 	token      string
+	account    string // email of the account (for token refresh)
 }
 
-// NewClient creates a new Graph client with the stored access token.
+// NewClient creates a new Graph client using the default account.
 // Returns the Client interface for dependency injection support.
 func NewClient() (Client, error) {
+	accounts, err := config.LoadAccounts()
+	if err != nil {
+		return nil, err
+	}
+	if accounts.Default == "" {
+		// Fall back to legacy single-account behavior
+		return newClientLegacy()
+	}
+	return NewClientForAccount(accounts.Default)
+}
+
+// newClientLegacy handles the legacy single-account case for backward compatibility.
+func newClientLegacy() (Client, error) {
 	tokens, err := config.LoadTokens()
 	if err != nil {
 		return nil, err
@@ -72,6 +91,62 @@ func NewClient() (Client, error) {
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		token:      tokens.AccessToken,
 	}, nil
+}
+
+// NewClientForAccount creates a new Graph client for a specific account.
+func NewClientForAccount(email string) (Client, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+
+	// Set storage type from config
+	if cfg.Storage != "" {
+		config.SetStorage(config.StorageType(cfg.Storage))
+	}
+
+	tokens, err := config.LoadTokensAutoForAccount(email)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if token needs refresh (with mutex protection)
+	expiresAt := tokens.GetExpiresAt()
+	if expiresAt > 0 && time.Now().Unix() >= expiresAt {
+		tokens, err = refreshTokenWithLock(email, cfg.GetClientID(), tokens.RefreshToken)
+		if err != nil {
+			return nil, fmt.Errorf("failed to refresh token for %s: %w", email, err)
+		}
+	}
+
+	// Set current account for slug operations
+	SetCurrentAccount(email)
+
+	return &GraphClient{
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		token:      tokens.AccessToken,
+		account:    email,
+	}, nil
+}
+
+// refreshTokenWithLock performs a token refresh with mutex protection to prevent race conditions.
+func refreshTokenWithLock(email, clientID, refreshToken string) (*config.Tokens, error) {
+	tokenRefreshMu.Lock()
+	defer tokenRefreshMu.Unlock()
+
+	// Re-check after acquiring lock (another goroutine may have refreshed)
+	cfg, _ := config.Load()
+	if cfg.Storage != "" {
+		config.SetStorage(config.StorageType(cfg.Storage))
+	}
+	tokens, err := config.LoadTokensAutoForAccount(email)
+	if err == nil && tokens.GetExpiresAt() > time.Now().Unix() {
+		// Token was refreshed by another goroutine
+		return tokens, nil
+	}
+
+	// Perform the refresh
+	return RefreshTokenForAccount(email, clientID, refreshToken)
 }
 
 // NewClientWithToken creates a new Graph client with a provided token (useful for testing).
@@ -216,6 +291,14 @@ func (c *GraphClient) request(ctx context.Context, method, path string, query ur
 	}
 
 	if resp.StatusCode >= 400 {
+		// Handle rate limiting (429 Too Many Requests)
+		if resp.StatusCode == 429 {
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				return nil, fmt.Errorf("rate limited by Microsoft Graph. Retry after %s seconds", retryAfter)
+			}
+			return nil, fmt.Errorf("rate limited by Microsoft Graph. Please wait and try again")
+		}
+
 		var errResp struct {
 			Error struct {
 				Code    string `json:"code"`
@@ -331,8 +414,45 @@ func PollForToken(clientID, deviceCode string, interval int) (*config.Tokens, er
 	}
 }
 
-// RefreshToken refreshes an access token.
+// RefreshToken refreshes an access token (legacy, saves to default location).
 func RefreshToken(clientID, refreshToken string) (*config.Tokens, error) {
+	tokens, err := doRefreshToken(clientID, refreshToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save the new tokens to legacy location
+	if err := config.SaveTokens(tokens); err != nil {
+		return nil, fmt.Errorf("failed to save tokens: %w", err)
+	}
+
+	return tokens, nil
+}
+
+// RefreshTokenForAccount refreshes an access token for a specific account.
+func RefreshTokenForAccount(email, clientID, refreshToken string) (*config.Tokens, error) {
+	if clientID == "" {
+		return nil, fmt.Errorf("client ID required for token refresh")
+	}
+	if refreshToken == "" {
+		return nil, fmt.Errorf("refresh token required, please login again for %s", email)
+	}
+
+	tokens, err := doRefreshToken(clientID, refreshToken)
+	if err != nil {
+		return nil, err
+	}
+
+	// Save to account-specific location
+	if err := config.SaveTokensAutoForAccount(email, tokens); err != nil {
+		return nil, fmt.Errorf("failed to save tokens for %s: %w", email, err)
+	}
+
+	return tokens, nil
+}
+
+// doRefreshToken performs the actual token refresh API call.
+func doRefreshToken(clientID, refreshToken string) (*config.Tokens, error) {
 	data := url.Values{}
 	data.Set("client_id", clientID)
 	data.Set("refresh_token", refreshToken)
@@ -358,16 +478,9 @@ func RefreshToken(clientID, refreshToken string) (*config.Tokens, error) {
 		return nil, fmt.Errorf("%s: %s", tokenResp.Error, tokenResp.ErrorDesc)
 	}
 
-	tokens := &config.Tokens{
+	return &config.Tokens{
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresAt:    time.Now().Unix() + int64(tokenResp.ExpiresIn),
-	}
-
-	// Save the new tokens
-	if err := config.SaveTokens(tokens); err != nil {
-		return nil, fmt.Errorf("failed to save tokens: %w", err)
-	}
-
-	return tokens, nil
+	}, nil
 }
