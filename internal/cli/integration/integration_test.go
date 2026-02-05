@@ -173,8 +173,8 @@ func TestIntegration_ContactsListJSON(t *testing.T) {
 func TestIntegration_ContactsSearch(t *testing.T) {
 	skipIfNoIntegration(t)
 	_, _, err := runMog(t, "contacts", "search", "test")
-	// May error if no contacts match, that's ok
-	_ = err
+	// Search may return empty results but should not error
+	assert.NoError(t, err)
 }
 
 // ==================== Tasks ====================

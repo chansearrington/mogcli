@@ -100,6 +100,10 @@ func DeleteTokensAuto() error {
 // keyringKeyForAccount generates a namespaced keyring key for an account.
 // Format: mog:<client_hash>:<email>
 // This allows future support for multiple client IDs per account.
+//
+// Note: If the client ID changes (e.g., user re-registers with a different Azure app),
+// tokens stored under the old key will become inaccessible. Users would need to
+// re-authenticate. This is intentional - tokens are bound to their originating client ID.
 func keyringKeyForAccount(email string) string {
 	clientID := "default"
 	if cfg, err := Load(); err == nil && cfg != nil {
@@ -160,6 +164,9 @@ func SaveTokensAutoForAccount(email string, tokens *Tokens) error {
 }
 
 // LoadTokensAutoForAccount loads tokens for an account using the current storage type.
+// Note: This function loads tokens sequentially from a single storage backend based on
+// CurrentStorage. It does not fall back to file if keyring fails (or vice versa).
+// The storage type should be set before calling this function via SetStorage().
 func LoadTokensAutoForAccount(email string) (*Tokens, error) {
 	switch CurrentStorage {
 	case StorageKeyring:
